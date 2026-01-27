@@ -2,6 +2,8 @@
 ## Title: PrototypeASMR
 ## Notes: Plays ASMR sounds on Prototype A.S.M.R. mount
 ## Author: Simbro
-## Version: 1.0.4
+## Version: 1.1.0
+## SavedVariables: PrototypeASMRDB
 
 PrototypeASMR.lua
+PrototypeGUI.lua
