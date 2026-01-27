@@ -1,0 +1,7 @@
+## Interface: 120000
+## Title: PrototypeASMR
+## Notes: Plays ASMR sounds on Prototype A.S.M.R. mount
+## Author: Simbro
+## Version: 1.0.4
+
+PrototypeASMR.lua
