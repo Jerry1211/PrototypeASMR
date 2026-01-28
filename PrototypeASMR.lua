@@ -100,9 +100,10 @@ local function HasSound(mountID, soundID)
     return false
 end
 
-local function AddSound(mountID, soundID)
-    if not mountID or not soundID then
-        Print("Usage: /asmr addsound <MountID|current> <SoundID>")
+-- UPDATED: supports single soundID OR comma-separated list "1, 2, 3"
+local function AddSound(mountID, soundIDs)
+    if not mountID or not soundIDs then
+        Print("Usage: /asmr addsounds <MountID|current> <SoundID[,SoundID,...]>")
         return
     end
 
@@ -111,13 +112,48 @@ local function AddSound(mountID, soundID)
         PrototypeASMRDB.mounts[mountID] = {}
     end
 
-    if HasSound(mountID, soundID) then
-        Print("SoundID " .. soundID .. " already exists for MountID " .. mountID)
+    -- If they passed a number, treat it as a single soundID
+    if type(soundIDs) == "number" then
+        if HasSound(mountID, soundIDs) then
+            Print("SoundID " .. soundIDs .. " already exists for MountID " .. mountID)
+            return
+        end
+        table.insert(PrototypeASMRDB.mounts[mountID], soundIDs)
+        Print("Added SoundID " .. soundIDs .. " to MountID " .. mountID)
         return
     end
 
-    table.insert(PrototypeASMRDB.mounts[mountID], soundID)
-    Print("Added SoundID " .. soundID .. " to MountID " .. mountID)
+    local added, skipped, invalid = 0, 0, 0
+    local raw = tostring(soundIDs)
+
+    -- Split by commas; allow spaces
+    for token in raw:gmatch("[^,]+") do
+        token = token:match("^%s*(.-)%s*$")
+        local sid = ToNumberSafe(token)
+
+        if sid then
+            if HasSound(mountID, sid) then
+                skipped = skipped + 1
+            else
+                table.insert(PrototypeASMRDB.mounts[mountID], sid)
+                added = added + 1
+            end
+        else
+            invalid = invalid + 1
+        end
+    end
+
+    if added > 0 then
+        Print("Added " .. added .. " sound(s) to MountID " .. mountID)
+    end
+    if skipped > 0 then
+        Print(skipped .. " sound(s) already existed and were skipped")
+    end
+    if invalid > 0 and added == 0 and skipped == 0 then
+        Print("No valid SoundIDs provided.")
+    elseif invalid > 0 then
+        Print(invalid .. " invalid entr" .. (invalid == 1 and "y" or "ies") .. " ignored")
+    end
 end
 
 local function RemoveSound(mountID, soundID)
@@ -226,9 +262,6 @@ end
 
 -- ======================================================
 -- "current" mount resolution
--- Uses lastMountedMountID set when mount spell succeeds.
--- Fallback: if currently mounted and our cache is built, attempt aura-less mapping via mount spell not available,
--- so we keep it simple: if lastMountedMountID nil, tell user to mount once.
 -- ======================================================
 local function GetCurrentMountIDForCommands()
     if lastMountedMountID and lastMountedMountID > 0 then
@@ -251,12 +284,11 @@ local function ShowHelp()
     Print("/asmr getid  (prints currently mounted mount ID)")
     Print("/asmr playsound <SoundID>")
     Print("/asmr testsound")
-    Print("/asmr addsound <MountID> <SoundID>")
-    Print("/asmr removesound <MountID> <SoundID>")
+    Print("/asmr addsound <MountID|current> <SoundID[,SoundID,...]>")
+    Print("/asmr addsounds <MountID|current> <SoundID[,SoundID,...]>")
+    Print("/asmr removesound <MountID|current> <SoundID>")
     Print("/asmr clearsounds <MountID|current>")
     Print("/asmr listsounds <MountID|current>")
-    Print("/asmr addsound current <SoundID>")
-    Print("/asmr removesound current <SoundID>")
 end
 
 -- ======================================================
@@ -327,19 +359,20 @@ SlashCmdList["PROTOTYPEASMR"] = function(msg)
         end
         return
 
-    elseif cmd == "addsound" then
-        local a, b = rest:match("^(%S+)%s+(%S+)$")
-        if not a then
-            Print("Usage: /asmr addsound <MountID|current> <SoundID>")
+    -- UPDATED: supports comma-separated SoundIDs and spaces
+    elseif cmd == "addsound" or cmd == "addsounds" then
+        local a, b = rest:match("^(%S+)%s+(.+)$")  -- IMPORTANT: capture the full remainder
+        if not a or not b then
+            Print("Usage: /asmr addsounds <MountID|current> <SoundID[,SoundID,...]>")
             return
         end
 
         if a:lower() == "current" then
             local mid = GetCurrentMountIDForCommands()
             if not mid then return end
-            AddSound(mid, ToNumberSafe(b))
+            AddSound(mid, b) -- pass raw list string
         else
-            AddSound(ToNumberSafe(a), ToNumberSafe(b))
+            AddSound(ToNumberSafe(a), b) -- pass raw list string
         end
         return
 
