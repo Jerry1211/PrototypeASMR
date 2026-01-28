@@ -78,6 +78,70 @@ local function HasSound(mountID, soundID)
     return false
 end
 
+-- ======================================================
+-- MULTI SOUND PARSING (NEW)
+-- ======================================================
+local function ParseSoundIDs(input)
+    local ids = {}
+    local invalid = 0
+
+    local raw = Trim(tostring(input or ""))
+    if raw == "" then
+        return ids, invalid
+    end
+
+    for token in raw:gmatch("[^,]+") do
+        token = Trim(token)
+        local sid = ToNumberSafe(token)
+        if sid then
+            ids[#ids + 1] = sid
+        else
+            invalid = invalid + 1
+        end
+    end
+
+    return ids, invalid
+end
+
+local function AddSoundsFromInput(mountID, input)
+    if not mountID then
+        Print("Missing mountID.")
+        return
+    end
+
+    EnsureDB()
+    if type(PrototypeASMRDB.mounts[mountID]) ~= "table" then
+        PrototypeASMRDB.mounts[mountID] = {}
+    end
+
+    local ids, invalid = ParseSoundIDs(input)
+    if #ids == 0 then
+        Print("Invalid SoundID.")
+        return
+    end
+
+    local added, skipped = 0, 0
+    for _, sid in ipairs(ids) do
+        if HasSound(mountID, sid) then
+            skipped = skipped + 1
+        else
+            table.insert(PrototypeASMRDB.mounts[mountID], sid)
+            added = added + 1
+        end
+    end
+
+    if added > 0 then
+        Print("Added " .. added .. " sound(s) to MountID " .. mountID)
+    end
+    if skipped > 0 then
+        Print(skipped .. " sound(s) already existed and were skipped")
+    end
+    if invalid > 0 then
+        Print(invalid .. " invalid entr" .. (invalid == 1 and "y" or "ies") .. " ignored")
+    end
+end
+
+-- KEEP this for single additions elsewhere if needed (unchanged usage)
 local function AddSound(mountID, soundID)
     if not mountID or not soundID then
         Print("Missing mountID or soundID.")
@@ -160,8 +224,7 @@ local C = {
     textDim   = {0.75,  0.80,  0.88,  1.0},
     accent    = {0.204, 0.827, 0.6,   1.0},
     danger    = {0.95,  0.33,  0.33,  1.0},
-	green     = {0.204, 0.827, 0.6,   1.0},
-
+    green     = {0.204, 0.827, 0.6,   1.0},
 }
 
 local function SafeClip(frame, on)
@@ -276,7 +339,6 @@ local function CreateButton(parent, text, w, h, kind)
     return b
 end
 
-
 local function CreateEditBox(parent, w, h, placeholder)
     local eb = CreateFrame("EditBox", nil, parent, "BackdropTemplate")
     eb:SetAutoFocus(false)
@@ -330,6 +392,7 @@ local function GetSelectedMountFromUI()
     return ResolveTargetMount(mountIDText, useCurrent)
 end
 
+-- NOTE: keep this for single-ID operations (Play/Remove)
 local function GetSoundIDFromUI()
     local raw = UI.ebSoundID and UI.ebSoundID:GetText() or ""
     raw = Trim(raw)
@@ -468,7 +531,6 @@ StaticPopupDialogs["PROTOTYPEASMR_GUI_REMOVE_SOUND"] = {
     preferredIndex = 3,
 }
 
-
 -- ======================================================
 -- Main GUI
 -- ======================================================
@@ -562,7 +624,7 @@ local function CreateGUI()
     local sTitle = CreateLabel(soundP, "Sound ID", 12, C.text)
     sTitle:SetPoint("TOPLEFT", soundP, "TOPLEFT", 10, -10)
 
-    UI.ebSoundID = CreateEditBox(soundP, 140, 22, "SoundID")
+    UI.ebSoundID = CreateEditBox(soundP, 180, 22, "SoundID (e.g. 1,2,3)")
     UI.ebSoundID:SetPoint("TOPLEFT", soundP, "TOPLEFT", 10, -32)
     UI.ebSoundID:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
 
@@ -633,37 +695,40 @@ local function CreateGUI()
     actions:SetBackdropColor(C.bgDark[1], C.bgDark[2], C.bgDark[3], 0.35)
     UI.actionsPanel = actions
 
+    -- UPDATED: Add supports comma-separated list from textbox
     UI.btnAdd = CreateButton(actions, "Add", 90, 22, "green")
     UI.btnAdd:SetPoint("TOPLEFT", actions, "TOPLEFT", 10, -10)
     UI.btnAdd:SetScript("OnClick", function()
         local mountID = GetSelectedMountFromUI()
         if not mountID then Print("Select a mount first.") return end
-        local sid = GetSoundIDFromUI()
-        if not sid then Print("Invalid SoundID.") return end
-        AddSound(mountID, sid)
+
+        local raw = UI.ebSoundID and UI.ebSoundID:GetText() or ""
+        raw = Trim(raw)
+        if raw == "" then Print("Invalid SoundID.") return end
+
+        AddSoundsFromInput(mountID, raw)
         RefreshSoundList()
     end)
 
-UI.btnRemove = CreateButton(actions, "Remove", 80, 24, "danger")
-UI.btnRemove:SetPoint("LEFT", UI.btnAdd, "RIGHT", 10, 0)
-UI.btnRemove:SetScript("OnClick", function()
-    local mountID = GetSelectedMountFromUI()
-    if not mountID then
-        Print("Select a mount first.")
-        return
-    end
+    UI.btnRemove = CreateButton(actions, "Remove", 80, 24, "danger")
+    UI.btnRemove:SetPoint("LEFT", UI.btnAdd, "RIGHT", 10, 0)
+    UI.btnRemove:SetScript("OnClick", function()
+        local mountID = GetSelectedMountFromUI()
+        if not mountID then
+            Print("Select a mount first.")
+            return
+        end
 
-    local sid = GetSoundIDFromUI()
-    if not sid then
-        Print("Invalid SoundID.")
-        return
-    end
+        local sid = GetSoundIDFromUI()
+        if not sid then
+            Print("Invalid SoundID.")
+            return
+        end
 
-    UI._pendingRemoveMountID = mountID
-    UI._pendingRemoveSoundID = sid
-    StaticPopup_Show("PROTOTYPEASMR_GUI_REMOVE_SOUND")
-end)
-
+        UI._pendingRemoveMountID = mountID
+        UI._pendingRemoveSoundID = sid
+        StaticPopup_Show("PROTOTYPEASMR_GUI_REMOVE_SOUND")
+    end)
 
     UI.btnClearAll = CreateButton(actions, "Clear All", 84, 24, "danger")
     UI.btnClearAll:SetPoint("TOPLEFT", UI.btnAdd, "BOTTOMLEFT", 0, -10)
