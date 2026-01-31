@@ -5,5 +5,10 @@
 ## Version: 1.1.0
 ## SavedVariables: PrototypeASMRDB
 
+Libs\LibSerialize\LibSerialize.lua
+Libs\LibDeflate\LibDeflate.lua
+Libs\LibStub\LibStub.lua
+
 PrototypeASMR.lua
+SaveManager.lua
 PrototypeGUI.lua
