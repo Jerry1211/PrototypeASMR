@@ -1,14 +1,16 @@
 ## Interface: 120000
-## Title: PrototypeASMR
-## Notes: Plays ASMR sounds on Prototype A.S.M.R. mount
-## Author: Simbro
-## Version: 1.1.0
+## Title: Prototype ASMR
+## Notes: Mount sound manager (Midnight) + GUI + Import/Export
+## Author: You
+## Version: 1.6.2
 ## SavedVariables: PrototypeASMRDB
 
-Libs\LibSerialize\LibSerialize.lua
-Libs\LibDeflate\LibDeflate.lua
-Libs\LibStub\LibStub.lua
-
 PrototypeASMR.lua
-SaveManager.lua
-PrototypeGUI.lua
+PrototypeSaveManager.lua
+PrototypeGUI_Core.lua
+PrototypeGUI_MainTab.lua
+PrototypeGUI_MountListTab.lua
+PrototypeGUI_ImportExportTab.lua
+PrototypeGUI_CustomSoundsTab.lua
+PrototypeGUI_Frame.lua
+PrototypeGUI_Events.lua

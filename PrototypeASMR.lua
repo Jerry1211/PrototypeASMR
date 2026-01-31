@@ -1,32 +1,25 @@
 -- PrototypeASMR.lua
+-- Runtime + event handling only (GUI-driven)
 
 local f = CreateFrame("Frame")
-
--- ======================================================
--- HARDCODED: Prototype A.S.M.R. defaults (hidden command)
--- ======================================================
-local ASMR_MOUNT_ID = 2507
-
-local ASMR_DEFAULT_SOUNDS = {
-    270277, 270278, 270279, 270280, 270281, 270282,
-    270283, 270284, 270285, 270286, 270287, 270288,
-    270289, 270290, 270291, 270292, 270293, 270294,
-}
 
 -- ======================================================
 -- SavedVariables
 -- ======================================================
 -- PrototypeASMRDB = {
 --   enabled = true/false,
---   mounts = { [mountID] = { soundIDs... } }
+--   mounts = { [mountID] = { entries... } }
+--   customSoundList = { {file="", name=""}, ... }
+--   customSoundMap  = { ["Cat-Meow"]="cat.mp3", ... }
+--   channel = "SFX"/"Master"/etc
 -- }
-PrototypeASMRDB = PrototypeASMRDB or nil
+PrototypeASMRDB = PrototypeASMRDB or {}
 
 -- ======================================================
 -- Runtime caches
 -- ======================================================
-local SpellToMountID = {}       -- spellID -> mountID
-local lastMountedMountID = nil  -- last mount detected via spellcast
+local SpellToMountID = {}
+local lastMountedMountID = nil
 
 -- ======================================================
 -- Utility
@@ -36,382 +29,124 @@ local function Print(msg)
 end
 
 local function SeedRNG()
-    -- Use global table directly in case a local 'math' shadowed it
     local m = _G.math
-    if not (m and m.random and m.randomseed) then
-        -- Don't hard error; just warn once
-        if not _G.__PROTOTYPEASMR_RNG_WARNED then
-            _G.__PROTOTYPEASMR_RNG_WARNED = true
-            DEFAULT_CHAT_FRAME:AddMessage("|cff66ccffPrototypeASMR:|r RNG init skipped (math.randomseed missing). Check for 'math' being overwritten.")
-        end
-        return
-    end
+    if not (m and m.random and m.randomseed) then return end
     m.randomseed(time())
     m.random(); m.random(); m.random()
 end
 
-
 local function EnsureDB()
-    if type(PrototypeASMRDB) ~= "table" then
-        PrototypeASMRDB = {}
-    end
-    if type(PrototypeASMRDB.mounts) ~= "table" then
-        PrototypeASMRDB.mounts = {}
-    end
-    if PrototypeASMRDB.enabled == nil then
-        PrototypeASMRDB.enabled = true
+    if type(PrototypeASMRDB) ~= "table" then PrototypeASMRDB = {} end
+    if type(PrototypeASMRDB.mounts) ~= "table" then PrototypeASMRDB.mounts = {} end
+    if PrototypeASMRDB.enabled == nil then PrototypeASMRDB.enabled = true end
+    if type(PrototypeASMRDB.customSoundList) ~= "table" then PrototypeASMRDB.customSoundList = {} end
+    if type(PrototypeASMRDB.customSoundMap) ~= "table" then PrototypeASMRDB.customSoundMap = {} end
+    if type(PrototypeASMRDB.channel) ~= "string" or PrototypeASMRDB.channel == "" then
+        PrototypeASMRDB.channel = "SFX"
     end
 end
 
-local function ToNumberSafe(x)
-    local n = tonumber(x)
-    if not n or n ~= n then return nil end
-    return n
+local function Trim(s)
+    return (tostring(s or "")):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
 -- ======================================================
--- Mount Journal cache: spellID -> mountID
+-- Custom Sound Map
+-- ======================================================
+local function RebuildCustomSoundMap()
+    EnsureDB()
+    PrototypeASMRDB.customSoundMap = {}
+
+    for _, row in ipairs(PrototypeASMRDB.customSoundList) do
+        local name = Trim(row.name)
+        local file = Trim(row.file)
+        if name ~= "" and file ~= "" then
+            PrototypeASMRDB.customSoundMap[name] = file
+        end
+    end
+end
+
+-- ======================================================
+-- Playback
+-- ======================================================
+local function PlayEntry(entry)
+    EnsureDB()
+    local channel = PrototypeASMRDB.channel or "SFX"
+
+    if type(entry) == "number" then
+        PlaySound(entry, channel)
+        return
+    end
+
+    if type(entry) == "string" then
+        local n = tonumber(entry)
+        if n then
+            PlaySound(n, channel)
+            return
+        end
+
+        local file = PrototypeASMRDB.customSoundMap[entry]
+        if file then
+            PlaySoundFile("Interface\\CustomSounds\\" .. file, channel)
+        end
+    end
+end
+
+local function PlayRandomForMount(mountID)
+    if not PrototypeASMRDB.enabled then return end
+
+    local list = PrototypeASMRDB.mounts[mountID]
+    if not list or #list == 0 then return end
+
+    PlayEntry(list[math.random(#list)])
+end
+
+-- ======================================================
+-- Mount Journal cache
 -- ======================================================
 local function BuildSpellToMountCache()
     wipe(SpellToMountID)
 
-    if not C_MountJournal or not C_MountJournal.GetMountIDs or not C_MountJournal.GetMountInfoByID then
-        return
-    end
-
-    local ids = C_MountJournal.GetMountIDs()
-    if type(ids) ~= "table" then return end
-
-    for _, mountID in ipairs(ids) do
+    if not C_MountJournal then return end
+    for _, mountID in ipairs(C_MountJournal.GetMountIDs() or {}) do
         local _, spellID = C_MountJournal.GetMountInfoByID(mountID)
-        if spellID and mountID then
+        if spellID then
             SpellToMountID[spellID] = mountID
         end
     end
 end
 
 -- ======================================================
--- Sound list helpers (DB-backed)
--- ======================================================
-local function GetMountSoundList(mountID)
-    EnsureDB()
-    local t = PrototypeASMRDB.mounts[mountID]
-    if type(t) ~= "table" then return nil end
-    return t
-end
-
-local function HasSound(mountID, soundID)
-    local list = GetMountSoundList(mountID)
-    if not list then return false end
-    for i = 1, #list do
-        if list[i] == soundID then
-            return true
-        end
-    end
-    return false
-end
-
--- UPDATED: supports single soundID OR comma-separated list "1, 2, 3"
-local function AddSound(mountID, soundIDs)
-    if not mountID or not soundIDs then
-        Print("Usage: /asmr addsounds <MountID|current> <SoundID[,SoundID,...]>")
-        return
-    end
-
-    EnsureDB()
-    if type(PrototypeASMRDB.mounts[mountID]) ~= "table" then
-        PrototypeASMRDB.mounts[mountID] = {}
-    end
-
-    -- If they passed a number, treat it as a single soundID
-    if type(soundIDs) == "number" then
-        if HasSound(mountID, soundIDs) then
-            Print("SoundID " .. soundIDs .. " already exists for MountID " .. mountID)
-            return
-        end
-        table.insert(PrototypeASMRDB.mounts[mountID], soundIDs)
-        Print("Added SoundID " .. soundIDs .. " to MountID " .. mountID)
-        return
-    end
-
-    local added, skipped, invalid = 0, 0, 0
-    local raw = tostring(soundIDs)
-
-    -- Split by commas; allow spaces
-    for token in raw:gmatch("[^,]+") do
-        token = token:match("^%s*(.-)%s*$")
-        local sid = ToNumberSafe(token)
-
-        if sid then
-            if HasSound(mountID, sid) then
-                skipped = skipped + 1
-            else
-                table.insert(PrototypeASMRDB.mounts[mountID], sid)
-                added = added + 1
-            end
-        else
-            invalid = invalid + 1
-        end
-    end
-
-    if added > 0 then
-        Print("Added " .. added .. " sound(s) to MountID " .. mountID)
-    end
-    if skipped > 0 then
-        Print(skipped .. " sound(s) already existed and were skipped")
-    end
-    if invalid > 0 and added == 0 and skipped == 0 then
-        Print("No valid SoundIDs provided.")
-    elseif invalid > 0 then
-        Print(invalid .. " invalid entr" .. (invalid == 1 and "y" or "ies") .. " ignored")
-    end
-end
-
-local function RemoveSound(mountID, soundID)
-    if not mountID or not soundID then
-        Print("Usage: /asmr removesound <MountID|current> <SoundID>")
-        return
-    end
-
-    local list = GetMountSoundList(mountID)
-    if not list then
-        Print("No sounds found for MountID " .. mountID)
-        return
-    end
-
-    for i = #list, 1, -1 do
-        if list[i] == soundID then
-            table.remove(list, i)
-            Print("Removed SoundID " .. soundID .. " from MountID " .. mountID)
-            if #list == 0 then
-                PrototypeASMRDB.mounts[mountID] = nil
-            end
-            return
-        end
-    end
-
-    Print("SoundID " .. soundID .. " not found for MountID " .. mountID)
-end
-
-local function ClearSounds(mountID)
-    if not mountID then
-        Print("Usage: /asmr clearsounds <MountID|current>")
-        return
-    end
-    EnsureDB()
-    PrototypeASMRDB.mounts[mountID] = nil
-    Print("Cleared all sounds for MountID " .. mountID)
-end
-
-local function ListSoundsForMount(mountID)
-    if not mountID then
-        Print("Usage: /asmr listsounds <MountID|current>")
-        return
-    end
-
-    EnsureDB()
-    local list = GetMountSoundList(mountID)
-    if not list or #list == 0 then
-        Print("No sounds configured for MountID " .. mountID)
-        return
-    end
-
-    local name = "Unknown"
-    if C_MountJournal and C_MountJournal.GetMountInfoByID then
-        local mountName = C_MountJournal.GetMountInfoByID(mountID)
-        if mountName and mountName ~= "" then name = mountName end
-    end
-
-    local out = {}
-    for i = 1, #list do out[#out+1] = tostring(list[i]) end
-    Print("MountID " .. mountID .. " (" .. name .. "): " .. table.concat(out, ", "))
-end
-
-local function PlayRandomForMount(mountID)
-    if not PrototypeASMRDB.enabled then return end
-    local list = GetMountSoundList(mountID)
-    if not list or #list == 0 then return end
-    local soundID = list[math.random(#list)]
-    PlaySound(soundID, "SFX")
-end
-
-local function PlaySoundByID(soundID)
-    if not soundID then
-        Print("Usage: /asmr playsound <SoundID>")
-        return
-    end
-    Print("Playing SoundID " .. soundID)
-    PlaySound(soundID, "SFX")
-end
-
--- ======================================================
--- Hidden: /asmr prototypeasmr (seed defaults into DB)
--- ======================================================
-local function AddPrototypeASMRDefaults()
-    EnsureDB()
-
-    if type(PrototypeASMRDB.mounts[ASMR_MOUNT_ID]) ~= "table" then
-        PrototypeASMRDB.mounts[ASMR_MOUNT_ID] = {}
-    end
-
-    local existing = {}
-    for _, sid in ipairs(PrototypeASMRDB.mounts[ASMR_MOUNT_ID]) do
-        existing[sid] = true
-    end
-
-    local added = 0
-    for _, sid in ipairs(ASMR_DEFAULT_SOUNDS) do
-        if not existing[sid] then
-            table.insert(PrototypeASMRDB.mounts[ASMR_MOUNT_ID], sid)
-            existing[sid] = true
-            added = added + 1
-        end
-    end
-
-    Print("Prototype A.S.M.R. defaults applied (added " .. added .. ").")
-end
-
--- ======================================================
--- "current" mount resolution
--- ======================================================
-local function GetCurrentMountIDForCommands()
-    if lastMountedMountID and lastMountedMountID > 0 then
-        return lastMountedMountID
-    end
-    if IsMounted and IsMounted() then
-        Print("Mount detected but mount ID not cached yet. Mount once to register it, then try again.")
-    else
-        Print("You are not mounted.")
-    end
-    return nil
-end
-
--- ======================================================
--- Help
--- ======================================================
-local function ShowHelp()
-    Print("Commands:")
-    Print("/asmr on | off")
-    Print("/asmr getid  (prints currently mounted mount ID)")
-    Print("/asmr playsound <SoundID>")
-    Print("/asmr testsound")
-    Print("/asmr addsound <MountID|current> <SoundID[,SoundID,...]>")
-    Print("/asmr addsounds <MountID|current> <SoundID[,SoundID,...]>")
-    Print("/asmr removesound <MountID|current> <SoundID>")
-    Print("/asmr clearsounds <MountID|current>")
-    Print("/asmr listsounds <MountID|current>")
-end
-
--- ======================================================
--- Slash commands
+-- Slash command: /asmr
 -- ======================================================
 SLASH_PROTOTYPEASMR1 = "/asmr"
 SlashCmdList["PROTOTYPEASMR"] = function(msg)
     EnsureDB()
 
-    msg = (msg or ""):gsub("^%s+", ""):gsub("%s+$", "")
-    local cmd, rest = msg:match("^(%S+)%s*(.*)$")
-    if not cmd then ShowHelp() return end
-    cmd = (cmd or ""):lower()
-    rest = rest or ""
+    msg = Trim(msg or ""):lower()
 
-    if cmd == "on" then
+    -- /asmr on
+    if msg == "on" then
         PrototypeASMRDB.enabled = true
         Print("Enabled.")
         return
+    end
 
-    elseif cmd == "off" then
+    -- /asmr off
+    if msg == "off" then
         PrototypeASMRDB.enabled = false
         Print("Disabled.")
         return
+    end
 
-    elseif cmd == "getid" then
-        local mid = GetCurrentMountIDForCommands()
-        if not mid then return end
-        local name, spellID = nil, nil
-        if C_MountJournal and C_MountJournal.GetMountInfoByID then
-            name, spellID = C_MountJournal.GetMountInfoByID(mid)
-        end
-        Print("Mounted: " .. (name or "Unknown") .. " | MountID " .. mid .. " | SpellID " .. (spellID or "nil"))
-        return
-
-    elseif cmd == "playsound" then
-        PlaySoundByID(ToNumberSafe(rest))
-        return
-
-    elseif cmd == "testsound" then
-        local mid = GetCurrentMountIDForCommands()
-        if not mid then return end
-        local list = GetMountSoundList(mid)
-        if not list or #list == 0 then
-            Print("No sounds configured for MountID " .. mid)
-            return
-        end
-        PlayRandomForMount(mid)
-        return
-
-    elseif cmd == "listsounds" then
-        if rest:lower() == "current" then
-            local mid = GetCurrentMountIDForCommands()
-            if not mid then return end
-            ListSoundsForMount(mid)
-        else
-            ListSoundsForMount(ToNumberSafe(rest))
-        end
-        return
-
-    elseif cmd == "clearsounds" then
-        if rest:lower() == "current" then
-            local mid = GetCurrentMountIDForCommands()
-            if not mid then return end
-            ClearSounds(mid)
-        else
-            ClearSounds(ToNumberSafe(rest))
-        end
-        return
-
-    -- UPDATED: supports comma-separated SoundIDs and spaces
-    elseif cmd == "addsound" or cmd == "addsounds" then
-        local a, b = rest:match("^(%S+)%s+(.+)$")  -- IMPORTANT: capture the full remainder
-        if not a or not b then
-            Print("Usage: /asmr addsounds <MountID|current> <SoundID[,SoundID,...]>")
-            return
-        end
-
-        if a:lower() == "current" then
-            local mid = GetCurrentMountIDForCommands()
-            if not mid then return end
-            AddSound(mid, b) -- pass raw list string
-        else
-            AddSound(ToNumberSafe(a), b) -- pass raw list string
-        end
-        return
-
-    elseif cmd == "removesound" then
-        local a, b = rest:match("^(%S+)%s+(%S+)$")
-        if not a then
-            Print("Usage: /asmr removesound <MountID|current> <SoundID>")
-            return
-        end
-
-        if a:lower() == "current" then
-            local mid = GetCurrentMountIDForCommands()
-            if not mid then return end
-            RemoveSound(mid, ToNumberSafe(b))
-        else
-            RemoveSound(ToNumberSafe(a), ToNumberSafe(b))
-        end
-        return
-
-    elseif cmd == "prototypeasmr" then
-        AddPrototypeASMRDefaults()
-        return
-
+    -- /asmr  -> open GUI (same as old /asmrgui)
+    if SlashCmdList["PROTOTYPEASMRGUI"] then
+        SlashCmdList["PROTOTYPEASMRGUI"]()
     else
-        ShowHelp()
-        return
+        Print("GUI not available.")
     end
 end
+
 
 -- ======================================================
 -- Events
@@ -420,30 +155,25 @@ f:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_LOGIN" then
         SeedRNG()
         EnsureDB()
+        RebuildCustomSoundMap()
         BuildSpellToMountCache()
-        Print("Loaded. " .. (PrototypeASMRDB.enabled and "Enabled" or "Disabled") .. ". Type /asmr for help.")
+        Print("Loaded. Type /asmr to open the GUI.")
         return
     end
 
     if event == "PLAYER_ENTERING_WORLD" then
-        -- Safe refresh in case MountJournal data wasn't ready at login
         BuildSpellToMountCache()
         return
     end
 
     if event == "UNIT_SPELLCAST_SUCCEEDED" then
         local unit, _, spellID = ...
-
         if unit ~= "player" then return end
-        if not spellID then return end
 
-        -- Translate mount spell -> mountID (this is the reliable "mount happened" trigger)
         local mountID = SpellToMountID[spellID]
         if mountID then
             lastMountedMountID = mountID
-            if PrototypeASMRDB.enabled then
-                PlayRandomForMount(mountID)
-            end
+            PlayRandomForMount(mountID)
         end
     end
 end)
