@@ -1,5 +1,5 @@
 -- PrototypeGUI.lua
--- GUI for PrototypeASMR (with Import/Export tab inside same window)
+-- GUI for PrototypeASMR (with Import/Export tab + Mount List tab inside same window)
 
 local addonName = ...
 local f = CreateFrame("Frame")
@@ -413,7 +413,7 @@ local function CreateScrollEditBox(parent, w, h)
 end
 
 -- ======================================================
--- Sound list
+-- Sound list (MAIN tab)
 -- ======================================================
 local SOUND_ROWS = 10
 local ROW_H = 18
@@ -533,6 +533,7 @@ StaticPopupDialogs["PROTOTYPEASMR_GUI_CLEAR_ALL"] = {
             ClearSounds(UI._pendingClearMountID)
             UI._pendingClearMountID = nil
             RefreshSoundList()
+            if UI.RefreshMountListTab then UI.RefreshMountListTab() end
         end
     end,
     OnCancel = function() UI._pendingClearMountID = nil end,
@@ -552,6 +553,7 @@ StaticPopupDialogs["PROTOTYPEASMR_GUI_REMOVE_SOUND"] = {
             UI._pendingRemoveMountID = nil
             UI._pendingRemoveSoundID = nil
             RefreshSoundList()
+            if UI.RefreshMountListTab then UI.RefreshMountListTab() end
         end
     end,
     OnCancel = function()
@@ -570,30 +572,193 @@ StaticPopupDialogs["PROTOTYPEASMR_GUI_REMOVE_SOUND"] = {
 local function SetActiveTab(which)
     UI.activeTab = which
 
-    local isMain = (which == "main")
+    local showMain = (which == "main")
+    local showIE   = (which == "ie")
+    local showML   = (which == "ml")
+
     if UI.mainPanels then
         for _, p in ipairs(UI.mainPanels) do
-            if p then p:SetShown(isMain) end
+            if p then p:SetShown(showMain) end
         end
     end
-    if UI.iePanel then
-        UI.iePanel:SetShown(not isMain)
-    end
+    if UI.iePanel then UI.iePanel:SetShown(showIE) end
+    if UI.mlPanel then UI.mlPanel:SetShown(showML) end
 
     if UI.tabMain then
-        UI.tabMain:SetBackdropBorderColor(unpack(isMain and C.accent or C.borderDim))
-        UI.tabMain.txt:SetTextColor(unpack(isMain and C.accent or C.text))
+        UI.tabMain:SetBackdropBorderColor(unpack(showMain and C.accent or C.borderDim))
+        UI.tabMain.txt:SetTextColor(unpack(showMain and C.accent or C.text))
     end
     if UI.tabIE then
-        UI.tabIE:SetBackdropBorderColor(unpack((not isMain) and C.accent or C.borderDim))
-        UI.tabIE.txt:SetTextColor(unpack((not isMain) and C.accent or C.text))
+        UI.tabIE:SetBackdropBorderColor(unpack(showIE and C.accent or C.borderDim))
+        UI.tabIE.txt:SetTextColor(unpack(showIE and C.accent or C.text))
+    end
+    if UI.tabML then
+        UI.tabML:SetBackdropBorderColor(unpack(showML and C.accent or C.borderDim))
+        UI.tabML.txt:SetTextColor(unpack(showML and C.accent or C.text))
     end
 
-    if isMain then
+    if showMain then
         RefreshInfoTexts()
         RefreshSoundList()
+    elseif showML then
+        if UI.RefreshMountListTab then UI.RefreshMountListTab() end
     end
 end
+
+-- ======================================================
+-- Mount List TAB (NEW)
+-- ======================================================
+local ML_MOUNT_ROWS = 14
+local ML_SOUND_ROWS = 14
+local ML_ROW_H = 18
+
+local mlMountButtons = {}
+local mlSoundButtons = {}
+local mlSelectedMountID = nil
+local mlSelectedSoundID = nil
+
+local function BuildConfiguredMountIDs()
+    local ids = {}
+    if type(PrototypeASMRDB) ~= "table" or type(PrototypeASMRDB.mounts) ~= "table" then
+        return ids
+    end
+
+    for mountID, sounds in pairs(PrototypeASMRDB.mounts) do
+        local mid = tonumber(mountID)
+        if mid and type(sounds) == "table" and #sounds > 0 then
+            ids[#ids + 1] = mid
+        end
+    end
+
+    table.sort(ids)
+    return ids
+end
+
+local function BuildSoundsForMount(mountID)
+    local out = {}
+    if not mountID then return out end
+    local list = PrototypeASMRDB.mounts[mountID]
+    if type(list) ~= "table" then return out end
+
+    for i = 1, #list do
+        out[#out + 1] = list[i]
+    end
+    table.sort(out)
+    return out
+end
+
+local function ML_SelectMount(mid)
+    mlSelectedMountID = mid
+    mlSelectedSoundID = nil
+
+    for i = 1, #mlMountButtons do
+        local b = mlMountButtons[i]
+        if b.mountID and b.mountID == mid then
+            b:SetBackdropBorderColor(unpack(C.accent))
+            b.txt:SetTextColor(unpack(C.accent))
+        else
+            b:SetBackdropBorderColor(unpack(C.borderDim))
+            b.txt:SetTextColor(unpack(C.text))
+        end
+    end
+
+    for i = 1, #mlSoundButtons do
+        local b = mlSoundButtons[i]
+        b:SetBackdropBorderColor(unpack(C.borderDim))
+        b.txt:SetTextColor(unpack(C.text))
+    end
+
+    if UI.mlSoundScroll then FauxScrollFrame_SetOffset(UI.mlSoundScroll, 0) end
+    if UI.RefreshMountListTab then UI.RefreshMountListTab() end
+end
+
+local function ML_SelectSound(sid)
+    mlSelectedSoundID = sid
+
+    for i = 1, #mlSoundButtons do
+        local b = mlSoundButtons[i]
+        if b.soundID and b.soundID == sid then
+            b:SetBackdropBorderColor(unpack(C.accent))
+            b.txt:SetTextColor(unpack(C.accent))
+        else
+            b:SetBackdropBorderColor(unpack(C.borderDim))
+            b.txt:SetTextColor(unpack(C.text))
+        end
+    end
+end
+
+local function RefreshMountListTab()
+    if not (UI.mlPanel and UI.mlPanel:IsShown() and UI.mlMountScroll and UI.mlSoundScroll) then
+        return
+    end
+
+    local mountIDs = BuildConfiguredMountIDs()
+    UI._mlMountIDs = mountIDs
+
+    FauxScrollFrame_Update(UI.mlMountScroll, #mountIDs, ML_MOUNT_ROWS, ML_ROW_H)
+    local moffset = FauxScrollFrame_GetOffset(UI.mlMountScroll)
+
+    for i = 1, ML_MOUNT_ROWS do
+        local idx = i + moffset
+        local btn = mlMountButtons[i]
+        local mid = mountIDs[idx]
+        if mid then
+            btn:Show()
+            btn.mountID = mid
+
+            local name = GetMountName(mid)
+            local count = (type(PrototypeASMRDB.mounts[mid]) == "table") and #PrototypeASMRDB.mounts[mid] or 0
+            btn.txt:SetText(("%s | %d (%d)"):format(name, mid, count))
+
+            if mlSelectedMountID == mid then
+                btn:SetBackdropBorderColor(unpack(C.accent))
+                btn.txt:SetTextColor(unpack(C.accent))
+            else
+                btn:SetBackdropBorderColor(unpack(C.borderDim))
+                btn.txt:SetTextColor(unpack(C.text))
+            end
+        else
+            btn:Hide()
+            btn.mountID = nil
+            btn.txt:SetText("")
+        end
+    end
+
+    if not mlSelectedMountID and #mountIDs > 0 then
+        mlSelectedMountID = mountIDs[1]
+    end
+
+    local sounds = BuildSoundsForMount(mlSelectedMountID)
+    UI._mlSounds = sounds
+
+    FauxScrollFrame_Update(UI.mlSoundScroll, #sounds, ML_SOUND_ROWS, ML_ROW_H)
+    local soffset = FauxScrollFrame_GetOffset(UI.mlSoundScroll)
+
+    for i = 1, ML_SOUND_ROWS do
+        local idx = i + soffset
+        local btn = mlSoundButtons[i]
+        local sid = sounds[idx]
+        if sid then
+            btn:Show()
+            btn.soundID = sid
+            btn.txt:SetText(tostring(sid))
+
+            if mlSelectedSoundID == sid then
+                btn:SetBackdropBorderColor(unpack(C.accent))
+                btn.txt:SetTextColor(unpack(C.accent))
+            else
+                btn:SetBackdropBorderColor(unpack(C.borderDim))
+                btn.txt:SetTextColor(unpack(C.text))
+            end
+        else
+            btn:Hide()
+            btn.soundID = nil
+            btn.txt:SetText("")
+        end
+    end
+end
+
+UI.RefreshMountListTab = RefreshMountListTab
 
 -- ======================================================
 -- Main GUI
@@ -616,23 +781,66 @@ local function CreateGUI()
     SafeClip(frame, true)
     frame:Hide()
 
+    -- Resizable (compat-safe)
+    frame:SetResizable(true)
+    if frame.SetResizeBounds then
+        frame:SetResizeBounds(560, 520, 1000, 1000)
+    else
+        frame.__minW, frame.__minH = 560, 520
+        frame.__maxW, frame.__maxH = 1000, 1000
+    end
+
     UI.frame = frame
 
-local title = CreateLabel(frame, "ProjectASMR Mount Sound Manager", 14, C.text)
+    local title = CreateLabel(frame, "ProjectASMR Mount Sound Manager", 14, C.text)
     title:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -10)
 
     local close = CreateButton(frame, "X", 22, 22, "danger")
     close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -10, -10)
     close:SetScript("OnClick", function() frame:Hide() end)
 
-    -- Tabs
+    -- Tabs (your order: close, IE, Main; add Mount List left of IE)
     UI.tabIE = CreateButton(frame, "Import/Export", 110, 22)
     UI.tabIE:SetPoint("TOPRIGHT", close, "TOPLEFT", -8, 0)
     UI.tabIE:SetScript("OnClick", function() SetActiveTab("ie") end)
 
+    UI.tabML = CreateButton(frame, "Mount List", 110, 22)
+    UI.tabML:SetPoint("TOPRIGHT", UI.tabIE, "TOPLEFT", -8, 0)
+    UI.tabML:SetScript("OnClick", function() SetActiveTab("ml") end)
+
     UI.tabMain = CreateButton(frame, "Main", 70, 22)
-    UI.tabMain:SetPoint("TOPRIGHT", UI.tabIE, "TOPLEFT", -8, 0)
+    UI.tabMain:SetPoint("TOPRIGHT", UI.tabML, "TOPLEFT", -8, 0)
     UI.tabMain:SetScript("OnClick", function() SetActiveTab("main") end)
+
+    -- Resize grip (bottom-right)
+    local grip = CreateFrame("Button", nil, frame)
+    grip:SetSize(16, 16)
+    grip:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -3, 3)
+    grip:EnableMouse(true)
+    grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+    grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+
+    grip:SetScript("OnMouseDown", function()
+        frame:StartSizing("BOTTOMRIGHT")
+    end)
+
+    grip:SetScript("OnMouseUp", function()
+        frame:StopMovingOrSizing()
+
+        if not frame.SetResizeBounds and frame.__minW then
+            local w, h = frame:GetSize()
+            local minW, minH = frame.__minW, frame.__minH
+            local maxW, maxH = frame.__maxW or w, frame.__maxH or h
+
+            if w < minW then w = minW end
+            if h < minH then h = minH end
+            if w > maxW then w = maxW end
+            if h > maxH then h = maxH end
+
+            frame:SetSize(w, h)
+        end
+    end)
 
     -- Info panel
     local info = CreatePanel(frame, frame:GetWidth() - 24, 94, C.bgLight, C.borderDim)
@@ -780,6 +988,7 @@ local title = CreateLabel(frame, "ProjectASMR Mount Sound Manager", 14, C.text)
 
         AddSoundsFromInput(mountID, raw)
         RefreshSoundList()
+        if UI.RefreshMountListTab then UI.RefreshMountListTab() end
     end)
 
     UI.btnRemove = CreateButton(actions, "Remove", 80, 24, "danger")
@@ -802,7 +1011,7 @@ local title = CreateLabel(frame, "ProjectASMR Mount Sound Manager", 14, C.text)
         StaticPopup_Show("PROTOTYPEASMR_GUI_REMOVE_SOUND")
     end)
 
-    UI.btnClearAll = CreateButton(actions, "Clear All", 84, 24, "danger")
+    UI.btnClearAll = CreateButton(actions, "Clear All", 84, 25, "danger")
     UI.btnClearAll:SetPoint("TOPLEFT", UI.btnAdd, "BOTTOMLEFT", 0, -10)
     UI.btnClearAll:SetScript("OnClick", function()
         local mountID = GetSelectedMountFromUI()
@@ -819,11 +1028,6 @@ local title = CreateLabel(frame, "ProjectASMR Mount Sound Manager", 14, C.text)
         PlayRandomForMount(mountID)
     end)
 
-    UI.btnImportExport = CreateButton(actions, "Import / Export", 190, 22)
-    UI.btnImportExport:SetPoint("TOPLEFT", UI.btnPlayRandom, "BOTTOMLEFT", 0, -10)
-    UI.btnImportExport:SetScript("OnClick", function()
-        SetActiveTab("ie")
-    end)
 
     -- Track main panels for tab switching
     UI.mainPanels = { info, mountP, soundP, listP }
@@ -833,6 +1037,7 @@ local title = CreateLabel(frame, "ProjectASMR Mount Sound Manager", 14, C.text)
     -- ======================================================
     local ieP = CreatePanel(frame, frame:GetWidth() - 24, frame:GetHeight() - 40 - 12, C.bgLight, C.borderDim)
     ieP:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -40)
+    ieP:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 12)
     ieP:SetBackdropColor(C.bgLight[1], C.bgLight[2], C.bgLight[3], 0.35)
     ieP:Hide()
     UI.iePanel = ieP
@@ -845,7 +1050,9 @@ local title = CreateLabel(frame, "ProjectASMR Mount Sound Manager", 14, C.text)
 
     local exportBoxFrame, exportEB = CreateScrollEditBox(ieP, ieP:GetWidth() - 20, 150)
     exportBoxFrame:SetPoint("TOPLEFT", ieP, "TOPLEFT", 10, -52)
+    exportBoxFrame:SetPoint("TOPRIGHT", ieP, "TOPRIGHT", -10, -52)
     UI.ieExportEB = exportEB
+    UI.ieExportBoxFrame = exportBoxFrame
 
     local btnExport = CreateButton(ieP, "Export", 90, 22, "green")
     btnExport:SetPoint("TOPLEFT", exportBoxFrame, "BOTTOMLEFT", 0, -10)
@@ -878,7 +1085,9 @@ local title = CreateLabel(frame, "ProjectASMR Mount Sound Manager", 14, C.text)
 
     local importBoxFrame, importEB = CreateScrollEditBox(ieP, ieP:GetWidth() - 20, 150)
     importBoxFrame:SetPoint("TOPLEFT", ieP, "TOPLEFT", 10, -270)
+    importBoxFrame:SetPoint("TOPRIGHT", ieP, "TOPRIGHT", -10, -270)
     UI.ieImportEB = importEB
+    UI.ieImportBoxFrame = importBoxFrame
 
     UI.ieOverride = CreateCheck(ieP, "Override (otherwise Merge + Dedupe)")
     UI.ieOverride:SetPoint("TOPLEFT", importBoxFrame, "BOTTOMLEFT", 2, -6)
@@ -898,6 +1107,8 @@ local title = CreateLabel(frame, "ProjectASMR Mount Sound Manager", 14, C.text)
         end
         local override = UI.ieOverride and UI.ieOverride:GetChecked()
         mgr:Import(msg, override)
+        RefreshSoundList()
+        if UI.RefreshMountListTab then UI.RefreshMountListTab() end
     end)
 
     local btnClearImport = CreateButton(ieP, "Clear", 90, 22)
@@ -907,7 +1118,182 @@ local title = CreateLabel(frame, "ProjectASMR Mount Sound Manager", 14, C.text)
         importEB:ClearFocus()
     end)
 
-    info:SetScript("OnSizeChanged", function()
+    -- ======================================================
+    -- Mount List TAB PANEL (NEW)
+    -- ======================================================
+    local mlP = CreatePanel(frame, frame:GetWidth() - 24, frame:GetHeight() - 40 - 12, C.bgLight, C.borderDim)
+    mlP:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -40)
+    mlP:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 12)
+    mlP:SetBackdropColor(C.bgLight[1], C.bgLight[2], C.bgLight[3], 0.35)
+    mlP:Hide()
+    UI.mlPanel = mlP
+
+    local mlTitle = CreateLabel(mlP, "Mounts with Sounds", 12, C.text)
+    mlTitle:SetPoint("TOPLEFT", mlP, "TOPLEFT", 10, -10)
+
+    UI.mlBtnPlay = CreateButton(mlP, "Play Sound", 110, 22, "green")
+    UI.mlBtnPlay:SetPoint("TOPRIGHT", mlP, "TOPRIGHT", -10, -10)
+    UI.mlBtnPlay:SetScript("OnClick", function()
+        if not mlSelectedSoundID then
+            Print("Select a sound first.")
+            return
+        end
+        PlaySound(mlSelectedSoundID, "SFX")
+    end)
+
+    UI.mlBtnRemove = CreateButton(mlP, "Remove", 90, 22, "danger")
+    UI.mlBtnRemove:SetPoint("RIGHT", UI.mlBtnPlay, "LEFT", -10, 0)
+    UI.mlBtnRemove:SetScript("OnClick", function()
+        if not mlSelectedMountID then
+            Print("Select a mount first.")
+            return
+        end
+        if not mlSelectedSoundID then
+            Print("Select a sound first.")
+            return
+        end
+
+        RemoveSound(mlSelectedMountID, mlSelectedSoundID)
+        mlSelectedSoundID = nil
+
+        RefreshMountListTab()
+
+        -- If main is visible, refresh it too (safe)
+        if UI.activeTab == "main" then
+            RefreshSoundList()
+            RefreshInfoTexts()
+        end
+    end)
+
+    local leftBox = CreateFrame("Frame", nil, mlP, "BackdropTemplate")
+    leftBox:SetPoint("TOPLEFT", mlP, "TOPLEFT", 10, -40)
+    leftBox:SetPoint("BOTTOMLEFT", mlP, "BOTTOMLEFT", 10, 10)
+    leftBox:SetPoint("RIGHT", mlP, "CENTER", -5, 0)
+    CreateBackdrop(leftBox, C.bgDark, C.borderDim)
+    SafeClip(leftBox, true)
+
+    local rightBox = CreateFrame("Frame", nil, mlP, "BackdropTemplate")
+    -- Anchor to TOP (not CENTER) so it matches the left box height
+    rightBox:SetPoint("TOPLEFT", mlP, "TOP", 5, -40)
+    rightBox:SetPoint("TOPRIGHT", mlP, "TOPRIGHT", -10, -40)
+    rightBox:SetPoint("BOTTOMRIGHT", mlP, "BOTTOMRIGHT", -10, 10)
+    CreateBackdrop(rightBox, C.bgDark, C.borderDim)
+    SafeClip(rightBox, true)
+
+    local leftLabel = CreateSmallLabel(mlP, "Mounts")
+    leftLabel:SetPoint("BOTTOMLEFT", leftBox, "TOPLEFT", 2, 6)
+
+    local rightLabel = CreateSmallLabel(mlP, "Sounds")
+    rightLabel:SetPoint("BOTTOMLEFT", rightBox, "TOPLEFT", 2, 6)
+
+    local mlMountScroll = CreateFrame("ScrollFrame", "PrototypeASMR_ML_MountScroll", leftBox, "FauxScrollFrameTemplate")
+    mlMountScroll:SetPoint("TOPLEFT", leftBox, "TOPLEFT", 0, -2)
+    mlMountScroll:SetPoint("BOTTOMRIGHT", leftBox, "BOTTOMRIGHT", -26, 2)
+    UI.mlMountScroll = mlMountScroll
+
+    mlMountScroll:SetScript("OnVerticalScroll", function(self, offset)
+        FauxScrollFrame_OnVerticalScroll(self, offset, ML_ROW_H, RefreshMountListTab)
+    end)
+
+    local mlSoundScroll = CreateFrame("ScrollFrame", "PrototypeASMR_ML_SoundScroll", rightBox, "FauxScrollFrameTemplate")
+    mlSoundScroll:SetPoint("TOPLEFT", rightBox, "TOPLEFT", 0, -2)
+    mlSoundScroll:SetPoint("BOTTOMRIGHT", rightBox, "BOTTOMRIGHT", -26, 2)
+    UI.mlSoundScroll = mlSoundScroll
+
+    mlSoundScroll:SetScript("OnVerticalScroll", function(self, offset)
+        FauxScrollFrame_OnVerticalScroll(self, offset, ML_ROW_H, RefreshMountListTab)
+    end)
+
+    for i = 1, ML_MOUNT_ROWS do
+        local row = CreateFrame("Button", nil, leftBox, "BackdropTemplate")
+        row:SetHeight(ML_ROW_H)
+        row:SetPoint("TOPLEFT", leftBox, "TOPLEFT", 10, -10 - (i - 1) * ML_ROW_H)
+        row:SetPoint("TOPRIGHT", leftBox, "TOPRIGHT", -10, -10 - (i - 1) * ML_ROW_H)
+        CreateBackdrop(row, {0, 0, 0, 0}, C.borderDim)
+
+        row.txt = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        row.txt:SetPoint("LEFT", row, "LEFT", 6, 0)
+        row.txt:SetTextColor(unpack(C.text))
+        row.txt:SetText("")
+
+        row:SetScript("OnEnter", function(self)
+            if self.mountID == mlSelectedMountID then return end
+            self:SetBackdropBorderColor(unpack(C.accent))
+        end)
+        row:SetScript("OnLeave", function(self)
+            if self.mountID == mlSelectedMountID then return end
+            self:SetBackdropBorderColor(unpack(C.borderDim))
+        end)
+
+        row:SetScript("OnClick", function(self)
+            if not self.mountID then return end
+            ML_SelectMount(self.mountID)
+        end)
+
+        mlMountButtons[i] = row
+    end
+
+    for i = 1, ML_SOUND_ROWS do
+        local row = CreateFrame("Button", nil, rightBox, "BackdropTemplate")
+        row:SetHeight(ML_ROW_H)
+        row:SetPoint("TOPLEFT", rightBox, "TOPLEFT", 10, -10 - (i - 1) * ML_ROW_H)
+        row:SetPoint("TOPRIGHT", rightBox, "TOPRIGHT", -10, -10 - (i - 1) * ML_ROW_H)
+        CreateBackdrop(row, {0, 0, 0, 0}, C.borderDim)
+
+        row.txt = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        row.txt:SetPoint("LEFT", row, "LEFT", 6, 0)
+        row.txt:SetTextColor(unpack(C.text))
+        row.txt:SetText("")
+
+        row:SetScript("OnEnter", function(self)
+            if self.soundID == mlSelectedSoundID then return end
+            self:SetBackdropBorderColor(unpack(C.accent))
+        end)
+        row:SetScript("OnLeave", function(self)
+            if self.soundID == mlSelectedSoundID then return end
+            self:SetBackdropBorderColor(unpack(C.borderDim))
+        end)
+
+        row:SetScript("OnClick", function(self)
+            if not self.soundID then return end
+            ML_SelectSound(self.soundID)
+        end)
+
+        mlSoundButtons[i] = row
+    end
+
+    -- Resizing updates
+    frame:SetScript("OnSizeChanged", function()
+        if UI.infoPanel then
+            UI.infoPanel:SetWidth(frame:GetWidth() - 24)
+        end
+
+        if soundP then
+            soundP:SetWidth(frame:GetWidth() - 24 - mountP:GetWidth() - 10)
+        end
+
+        if listP then
+            listP:SetWidth(frame:GetWidth() - 24)
+        end
+
+        if UI.iePanel then
+            UI.iePanel:SetWidth(frame:GetWidth() - 24)
+            UI.iePanel:SetHeight(frame:GetHeight() - 40 - 12)
+
+            if UI.ieExportBoxFrame and UI.ieExportBoxFrame.editBox then
+                UI.ieExportBoxFrame:SetWidth(UI.iePanel:GetWidth() - 20)
+                UI.ieExportBoxFrame.editBox:SetWidth(UI.iePanel:GetWidth() - 20 - 40)
+            end
+            if UI.ieImportBoxFrame and UI.ieImportBoxFrame.editBox then
+                UI.ieImportBoxFrame:SetWidth(UI.iePanel:GetWidth() - 20)
+                UI.ieImportBoxFrame.editBox:SetWidth(UI.iePanel:GetWidth() - 20 - 40)
+            end
+        end
+
+        if UI.mlPanel and UI.mlPanel:IsShown() then
+            RefreshMountListTab()
+        end
+
         RefreshInfoTexts()
     end)
 
@@ -927,6 +1313,9 @@ SlashCmdList["PROTOTYPEASMRGUI"] = function()
     if UI.frame:IsShown() then
         RefreshInfoTexts()
         RefreshSoundList()
+        if UI.activeTab == "ml" and UI.RefreshMountListTab then
+            UI.RefreshMountListTab()
+        end
     end
 end
 
@@ -958,6 +1347,9 @@ f:SetScript("OnEvent", function(_, event, ...)
                 RefreshInfoTexts()
                 if UI.chkUseCurrent and UI.chkUseCurrent:GetChecked() then
                     RefreshSoundList()
+                end
+                if UI.activeTab == "ml" and UI.RefreshMountListTab then
+                    UI.RefreshMountListTab()
                 end
             end
         end

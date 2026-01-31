@@ -36,9 +36,20 @@ local function Print(msg)
 end
 
 local function SeedRNG()
-    math.randomseed(time())
-    math.random(); math.random(); math.random()
+    -- Use global table directly in case a local 'math' shadowed it
+    local m = _G.math
+    if not (m and m.random and m.randomseed) then
+        -- Don't hard error; just warn once
+        if not _G.__PROTOTYPEASMR_RNG_WARNED then
+            _G.__PROTOTYPEASMR_RNG_WARNED = true
+            DEFAULT_CHAT_FRAME:AddMessage("|cff66ccffPrototypeASMR:|r RNG init skipped (math.randomseed missing). Check for 'math' being overwritten.")
+        end
+        return
+    end
+    m.randomseed(time())
+    m.random(); m.random(); m.random()
 end
+
 
 local function EnsureDB()
     if type(PrototypeASMRDB) ~= "table" then
