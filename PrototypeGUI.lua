@@ -1,5 +1,5 @@
 -- PrototypeGUI.lua
--- GUI for PrototypeASMR
+-- GUI for PrototypeASMR (with Import/Export tab inside same window)
 
 local addonName = ...
 local f = CreateFrame("Frame")
@@ -79,7 +79,7 @@ local function HasSound(mountID, soundID)
 end
 
 -- ======================================================
--- MULTI SOUND PARSING (NEW)
+-- MULTI SOUND PARSING
 -- ======================================================
 local function ParseSoundIDs(input)
     local ids = {}
@@ -141,7 +141,6 @@ local function AddSoundsFromInput(mountID, input)
     end
 end
 
--- KEEP this for single additions elsewhere if needed (unchanged usage)
 local function AddSound(mountID, soundID)
     if not mountID or not soundID then
         Print("Missing mountID or soundID.")
@@ -378,6 +377,41 @@ local function CreateCheck(parent, text, onClick)
     return c
 end
 
+-- NEW: skinned multiline scroll edit
+local function CreateScrollEditBox(parent, w, h)
+    local box = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    box:SetSize(w, h)
+    CreateBackdrop(box, C.bgDark, C.borderDim)
+    SafeClip(box, true)
+
+    local sf = CreateFrame("ScrollFrame", nil, box, "UIPanelScrollFrameTemplate")
+    sf:SetPoint("TOPLEFT", box, "TOPLEFT", 6, -6)
+    sf:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", -26, 6)
+
+    local eb = CreateFrame("EditBox", nil, sf)
+    eb:SetMultiLine(true)
+    eb:SetAutoFocus(false)
+    eb:SetFontObject("GameFontHighlightSmall")
+    eb:SetTextColor(unpack(C.text))
+    eb:SetWidth(w - 40)
+    eb:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    eb:SetTextInsets(8, 8, 8, 8)
+
+    eb:SetScript("OnEditFocusGained", function()
+        box:SetBackdropBorderColor(unpack(C.accent))
+    end)
+    eb:SetScript("OnEditFocusLost", function()
+        box:SetBackdropBorderColor(unpack(C.borderDim))
+    end)
+
+    sf:SetScrollChild(eb)
+
+    box.editBox = eb
+    box.scrollFrame = sf
+
+    return box, eb
+end
+
 -- ======================================================
 -- Sound list
 -- ======================================================
@@ -392,7 +426,6 @@ local function GetSelectedMountFromUI()
     return ResolveTargetMount(mountIDText, useCurrent)
 end
 
--- NOTE: keep this for single-ID operations (Play/Remove)
 local function GetSoundIDFromUI()
     local raw = UI.ebSoundID and UI.ebSoundID:GetText() or ""
     raw = Trim(raw)
@@ -532,13 +565,44 @@ StaticPopupDialogs["PROTOTYPEASMR_GUI_REMOVE_SOUND"] = {
 }
 
 -- ======================================================
+-- Tabs
+-- ======================================================
+local function SetActiveTab(which)
+    UI.activeTab = which
+
+    local isMain = (which == "main")
+    if UI.mainPanels then
+        for _, p in ipairs(UI.mainPanels) do
+            if p then p:SetShown(isMain) end
+        end
+    end
+    if UI.iePanel then
+        UI.iePanel:SetShown(not isMain)
+    end
+
+    if UI.tabMain then
+        UI.tabMain:SetBackdropBorderColor(unpack(isMain and C.accent or C.borderDim))
+        UI.tabMain.txt:SetTextColor(unpack(isMain and C.accent or C.text))
+    end
+    if UI.tabIE then
+        UI.tabIE:SetBackdropBorderColor(unpack((not isMain) and C.accent or C.borderDim))
+        UI.tabIE.txt:SetTextColor(unpack((not isMain) and C.accent or C.text))
+    end
+
+    if isMain then
+        RefreshInfoTexts()
+        RefreshSoundList()
+    end
+end
+
+-- ======================================================
 -- Main GUI
 -- ======================================================
 local function CreateGUI()
     EnsureDB()
 
     local frame = CreateFrame("Frame", "PrototypeASMR_GUI", UIParent, "BackdropTemplate")
-    frame:SetSize(560, 460)
+    frame:SetSize(560, 520)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("DIALOG")
     frame:SetFrameLevel(100)
@@ -554,12 +618,21 @@ local function CreateGUI()
 
     UI.frame = frame
 
-    local title = CreateLabel(frame, "PrototypeASMR GUI", 14, C.text)
+local title = CreateLabel(frame, "ProjectASMR Mount Sound Manager", 14, C.text)
     title:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -10)
 
     local close = CreateButton(frame, "X", 22, 22, "danger")
     close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -10, -10)
     close:SetScript("OnClick", function() frame:Hide() end)
+
+    -- Tabs
+    UI.tabIE = CreateButton(frame, "Import/Export", 110, 22)
+    UI.tabIE:SetPoint("TOPRIGHT", close, "TOPLEFT", -8, 0)
+    UI.tabIE:SetScript("OnClick", function() SetActiveTab("ie") end)
+
+    UI.tabMain = CreateButton(frame, "Main", 70, 22)
+    UI.tabMain:SetPoint("TOPRIGHT", UI.tabIE, "TOPLEFT", -8, 0)
+    UI.tabMain:SetScript("OnClick", function() SetActiveTab("main") end)
 
     -- Info panel
     local info = CreatePanel(frame, frame:GetWidth() - 24, 94, C.bgLight, C.borderDim)
@@ -695,7 +768,6 @@ local function CreateGUI()
     actions:SetBackdropColor(C.bgDark[1], C.bgDark[2], C.bgDark[3], 0.35)
     UI.actionsPanel = actions
 
-    -- UPDATED: Add supports comma-separated list from textbox
     UI.btnAdd = CreateButton(actions, "Add", 90, 22, "green")
     UI.btnAdd:SetPoint("TOPLEFT", actions, "TOPLEFT", 10, -10)
     UI.btnAdd:SetScript("OnClick", function()
@@ -747,10 +819,99 @@ local function CreateGUI()
         PlayRandomForMount(mountID)
     end)
 
+    UI.btnImportExport = CreateButton(actions, "Import / Export", 190, 22)
+    UI.btnImportExport:SetPoint("TOPLEFT", UI.btnPlayRandom, "BOTTOMLEFT", 0, -10)
+    UI.btnImportExport:SetScript("OnClick", function()
+        SetActiveTab("ie")
+    end)
+
+    -- Track main panels for tab switching
+    UI.mainPanels = { info, mountP, soundP, listP }
+
+    -- ======================================================
+    -- Import / Export TAB PANEL
+    -- ======================================================
+    local ieP = CreatePanel(frame, frame:GetWidth() - 24, frame:GetHeight() - 40 - 12, C.bgLight, C.borderDim)
+    ieP:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -40)
+    ieP:SetBackdropColor(C.bgLight[1], C.bgLight[2], C.bgLight[3], 0.35)
+    ieP:Hide()
+    UI.iePanel = ieP
+
+    local ieTitle = CreateLabel(ieP, "Import / Export Settings", 12, C.text)
+    ieTitle:SetPoint("TOPLEFT", ieP, "TOPLEFT", 10, -10)
+
+    local exportLabel = CreateSmallLabel(ieP, "Export")
+    exportLabel:SetPoint("TOPLEFT", ieP, "TOPLEFT", 10, -34)
+
+    local exportBoxFrame, exportEB = CreateScrollEditBox(ieP, ieP:GetWidth() - 20, 150)
+    exportBoxFrame:SetPoint("TOPLEFT", ieP, "TOPLEFT", 10, -52)
+    UI.ieExportEB = exportEB
+
+    local btnExport = CreateButton(ieP, "Export", 90, 22, "green")
+    btnExport:SetPoint("TOPLEFT", exportBoxFrame, "BOTTOMLEFT", 0, -10)
+    btnExport:SetScript("OnClick", function()
+        local mgr = _G["PrototypeASMR_SaveManager"]
+        if not (mgr and mgr.Export) then
+            Print("Import/Export system not loaded.")
+            return
+        end
+        local encoded = mgr:Export()
+        if not encoded or encoded == "" then
+            Print("Export returned empty.")
+            return
+        end
+        exportEB:SetText(encoded)
+        exportEB:HighlightText()
+        exportEB:SetFocus()
+        Print("Exported.")
+    end)
+
+    local btnClearExport = CreateButton(ieP, "Clear", 90, 22)
+    btnClearExport:SetPoint("LEFT", btnExport, "RIGHT", 10, 0)
+    btnClearExport:SetScript("OnClick", function()
+        exportEB:SetText("")
+        exportEB:ClearFocus()
+    end)
+
+    local importLabel = CreateSmallLabel(ieP, "Import")
+    importLabel:SetPoint("TOPLEFT", btnExport, "BOTTOMLEFT", 0, -16)
+
+    local importBoxFrame, importEB = CreateScrollEditBox(ieP, ieP:GetWidth() - 20, 150)
+    importBoxFrame:SetPoint("TOPLEFT", ieP, "TOPLEFT", 10, -270)
+    UI.ieImportEB = importEB
+
+    UI.ieOverride = CreateCheck(ieP, "Override (otherwise Merge + Dedupe)")
+    UI.ieOverride:SetPoint("TOPLEFT", importBoxFrame, "BOTTOMLEFT", 2, -6)
+
+    local btnImport = CreateButton(ieP, "Import", 90, 22, "green")
+    btnImport:SetPoint("TOPRIGHT", importBoxFrame, "BOTTOMRIGHT", 0, -10)
+    btnImport:SetScript("OnClick", function()
+        local mgr = _G["PrototypeASMR_SaveManager"]
+        if not (mgr and mgr.Import) then
+            Print("Import/Export system not loaded.")
+            return
+        end
+        local msg = (importEB:GetText() or ""):match("^%s*(.-)%s*$")
+        if msg == "" then
+            Print("Import box is empty.")
+            return
+        end
+        local override = UI.ieOverride and UI.ieOverride:GetChecked()
+        mgr:Import(msg, override)
+    end)
+
+    local btnClearImport = CreateButton(ieP, "Clear", 90, 22)
+    btnClearImport:SetPoint("RIGHT", btnImport, "LEFT", -10, 0)
+    btnClearImport:SetScript("OnClick", function()
+        importEB:SetText("")
+        importEB:ClearFocus()
+    end)
+
     info:SetScript("OnSizeChanged", function()
         RefreshInfoTexts()
     end)
 
+    SetActiveTab("main")
     RefreshInfoTexts()
     RefreshSoundList()
 end
